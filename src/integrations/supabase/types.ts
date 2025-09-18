@@ -14,7 +14,42 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      recording_sessions: {
+        Row: {
+          controller_id: string | null
+          created_at: string
+          id: string
+          recorder_id: string | null
+          recording_end_time: string | null
+          recording_start_time: string | null
+          session_code: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          controller_id?: string | null
+          created_at?: string
+          id?: string
+          recorder_id?: string | null
+          recording_end_time?: string | null
+          recording_start_time?: string | null
+          session_code: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          controller_id?: string | null
+          created_at?: string
+          id?: string
+          recorder_id?: string | null
+          recording_end_time?: string | null
+          recording_start_time?: string | null
+          session_code?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

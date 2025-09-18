@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
 import { 
   ArrowLeft, 
   Mic, 
@@ -15,11 +16,13 @@ import {
   Wifi,
   WifiOff,
   Play,
-  Square
+  Square,
+  LogIn
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { useRecordingSession } from "@/hooks/useRecordingSession";
 
 /**
  * Interface do Gravador
@@ -27,17 +30,19 @@ import { supabase } from "@/integrations/supabase/client";
  * Mostra status da gravação, upload e configurações
  */
 const Recorder = () => {
-  // Estados para controle da gravação
-  const [isConnected, setIsConnected] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
+  const { session, joinSession } = useRecordingSession();
+  const [inputCode, setInputCode] = useState("");
   const [recordingTime, setRecordingTime] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
-  const [storageUsed, setStorageUsed] = useState(67); // Porcentagem
+  const [storageUsed, setStorageUsed] = useState(67);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
   const { toast } = useToast();
+
+  const isConnected = session?.status === 'connected' || session?.status === 'recording' || session?.status === 'finished';
+  const isRecording = session?.status === 'recording';
 
   // Simulação do timer de gravação
   useEffect(() => {
@@ -142,19 +147,39 @@ const Recorder = () => {
     }
   }, [audioChunks, recordingTime, toast]);
 
-  // Inicializar conexão e gravador
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsConnected(true);
-      initializeMediaRecorder();
+  // Entrar na sessão
+  const handleJoinSession = async () => {
+    if (!inputCode.trim()) {
       toast({
-        title: "Dispositivo Pronto",
-        description: "Microfone configurado e pronto para gravar",
+        title: "Erro",
+        description: "Digite o código da sessão",
+        variant: "destructive"
       });
-    }, 1500);
-    
-    return () => clearTimeout(timer);
-  }, [initializeMediaRecorder]);
+      return;
+    }
+
+    const success = await joinSession(inputCode.trim().toUpperCase());
+    if (success) {
+      await initializeMediaRecorder();
+      setInputCode("");
+    }
+  };
+
+  // Inicializar microfone quando conectar
+  useEffect(() => {
+    if (isConnected && !mediaRecorder) {
+      initializeMediaRecorder();
+    }
+  }, [isConnected, mediaRecorder, initializeMediaRecorder]);
+
+  // Auto-iniciar gravação quando o status mudar para 'recording'
+  useEffect(() => {
+    if (session?.status === 'recording' && mediaRecorder && !isRecording) {
+      startRecording();
+    } else if (session?.status === 'finished' && isRecording) {
+      stopRecording();
+    }
+  }, [session?.status, mediaRecorder, isRecording]);
 
   // Formatar tempo de gravação
   const formatTime = (seconds: number) => {
@@ -168,7 +193,6 @@ const Recorder = () => {
     if (mediaRecorder && mediaRecorder.state === 'inactive' && isConnected) {
       setAudioChunks([]);
       mediaRecorder.start();
-      setIsRecording(true);
       setRecordingTime(0);
       toast({
         title: "Gravação Iniciada",
@@ -181,7 +205,6 @@ const Recorder = () => {
   const stopRecording = useCallback(() => {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       mediaRecorder.stop();
-      setIsRecording(false);
       toast({
         title: "Gravação Finalizada",
         description: "Processando e enviando por email...",
@@ -317,41 +340,80 @@ const Recorder = () => {
 
           {/* Painel lateral */}
           <div className="space-y-6">
-            {/* Status da conexão */}
-            <Card className="p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <Signal className="w-5 h-5" />
-                <h4 className="font-semibold">Conexão</h4>
-              </div>
-              
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">Status:</span>
-                  <Badge variant={isConnected ? "default" : "secondary"}>
-                    {isConnected ? (
-                      <>
-                        <Wifi className="w-3 h-3 mr-1" />
-                        Online
-                      </>
-                    ) : (
-                      <>
-                        <WifiOff className="w-3 h-3 mr-1" />
-                        Offline
-                      </>
-                    )}
-                  </Badge>
+            {/* Conectar à sessão */}
+            {!session ? (
+              <Card className="p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <LogIn className="w-5 h-5" />
+                  <h4 className="font-semibold">Conectar à Sessão</h4>
                 </div>
                 
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">Controlador:</span>
-                  <Badge variant="outline">Conectado</Badge>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">
+                      Código da Sessão
+                    </label>
+                    <Input 
+                      value={inputCode}
+                      onChange={(e) => setInputCode(e.target.value.toUpperCase())}
+                      placeholder="Digite o código"
+                      className="font-mono text-center text-lg"
+                      maxLength={6}
+                    />
+                  </div>
+                  
+                  <Button 
+                    onClick={handleJoinSession}
+                    className="w-full"
+                    disabled={!inputCode.trim()}
+                  >
+                    Conectar ao Controlador
+                  </Button>
+                </div>
+              </Card>
+            ) : (
+              <Card className="p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Signal className="w-5 h-5" />
+                  <h4 className="font-semibold">Status da Conexão</h4>
                 </div>
                 
-                <div className="text-xs text-muted-foreground">
-                  ✓ Conexão segura WebSocket ativa
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Status:</span>
+                    <Badge variant={isConnected ? "default" : "secondary"}>
+                      {session.status === 'connected' && (
+                        <>
+                          <Wifi className="w-3 h-3 mr-1" />
+                          Conectado
+                        </>
+                      )}
+                      {session.status === 'recording' && (
+                        <>
+                          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse mr-1" />
+                          Gravando
+                        </>
+                      )}
+                      {session.status === 'finished' && (
+                        <>
+                          <Wifi className="w-3 h-3 mr-1" />
+                          Finalizado
+                        </>
+                      )}
+                    </Badge>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Sessão:</span>
+                    <Badge variant="outline">{session.session_code}</Badge>
+                  </div>
+                  
+                  <div className="text-xs text-muted-foreground">
+                    ✓ Conectado ao controlador em tempo real
+                  </div>
                 </div>
-              </div>
-            </Card>
+              </Card>
+            )}
 
             {/* Armazenamento */}
             <Card className="p-6">

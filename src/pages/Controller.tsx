@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
 import { 
   ArrowLeft, 
   Play, 
@@ -12,10 +12,13 @@ import {
   WifiOff, 
   Clock,
   History,
-  Settings
+  Settings,
+  Copy,
+  LogIn
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { useRecordingSession } from "@/hooks/useRecordingSession";
 
 /**
  * Interface do Controlador
@@ -23,12 +26,13 @@ import { useToast } from "@/hooks/use-toast";
  * Mostra status da conexão, histórico e configurações
  */
 const Controller = () => {
-  // Estados para controle da interface
-  const [isConnected, setIsConnected] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
+  const { session, createSession, startRecording, stopRecording, disconnect } = useRecordingSession();
+  const [sessionCode, setSessionCode] = useState<string>("");
   const [recordingTime, setRecordingTime] = useState(0);
-  const [deviceName, setDeviceName] = useState("Gravador-001");
   const { toast } = useToast();
+
+  const isConnected = session?.status === 'connected' || session?.status === 'recording' || session?.status === 'finished';
+  const isRecording = session?.status === 'recording';
 
   // Simulação do timer de gravação
   useEffect(() => {
@@ -48,36 +52,36 @@ const Controller = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Função para conectar/desconectar do gravador
-  const handleConnection = () => {
-    if (isConnected) {
-      setIsConnected(false);
-      setIsRecording(false);
-      setRecordingTime(0);
-      toast({
-        title: "Desconectado",
-        description: "Desconectado do dispositivo gravador",
-      });
-    } else {
-      // Simulação de processo de conexão
-      toast({
-        title: "Conectando...",
-        description: "Estabelecendo conexão com o gravador",
-      });
-      
-      setTimeout(() => {
-        setIsConnected(true);
-        toast({
-          title: "Conectado!",
-          description: `Conectado ao ${deviceName}`,
-          variant: "default",
-        });
-      }, 2000);
+  // Criar nova sessão
+  const handleCreateSession = async () => {
+    const code = await createSession();
+    if (code) {
+      setSessionCode(code);
     }
   };
 
+  // Desconectar
+  const handleDisconnect = () => {
+    disconnect();
+    setSessionCode("");
+    setRecordingTime(0);
+    toast({
+      title: "Desconectado",
+      description: "Sessão encerrada",
+    });
+  };
+
+  // Copiar código da sessão
+  const copySessionCode = () => {
+    navigator.clipboard.writeText(sessionCode);
+    toast({
+      title: "Copiado!",
+      description: "Código copiado para a área de transferência",
+    });
+  };
+
   // Função para iniciar gravação
-  const handleStartRecording = () => {
+  const handleStartRecording = async () => {
     if (!isConnected) {
       toast({
         title: "Erro",
@@ -87,21 +91,25 @@ const Controller = () => {
       return;
     }
 
-    setIsRecording(true);
-    setRecordingTime(0);
-    toast({
-      title: "Gravação Iniciada",
-      description: "Comando enviado para o gravador",
-    });
+    const success = await startRecording();
+    if (success) {
+      setRecordingTime(0);
+      toast({
+        title: "Gravação Iniciada",
+        description: "Comando enviado para o gravador",
+      });
+    }
   };
 
   // Função para parar gravação
-  const handleStopRecording = () => {
-    setIsRecording(false);
-    toast({
-      title: "Gravação Finalizada",
-      description: `Duração: ${formatTime(recordingTime)}`,
-    });
+  const handleStopRecording = async () => {
+    const success = await stopRecording();
+    if (success) {
+      toast({
+        title: "Gravação Finalizada", 
+        description: `Duração: ${formatTime(recordingTime)}`,
+      });
+    }
   };
 
   return (
@@ -124,17 +132,30 @@ const Controller = () => {
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Painel principal de controle */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Status da conexão */}
+            {/* Criar/Gerenciar Sessão */}
             <Card className="p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold">Status da Conexão</h3>
+                <h3 className="text-xl font-semibold">Sessão de Gravação</h3>
                 <Badge variant={isConnected ? "default" : "secondary"} className="text-sm">
-                  {isConnected ? (
+                  {session?.status === 'waiting' && (
+                    <>
+                      <Clock className="w-4 h-4 mr-1" />
+                      Aguardando
+                    </>
+                  )}
+                  {session?.status === 'connected' && (
                     <>
                       <Wifi className="w-4 h-4 mr-1" />
                       Conectado
                     </>
-                  ) : (
+                  )}
+                  {session?.status === 'recording' && (
+                    <>
+                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse mr-1" />
+                      Gravando
+                    </>
+                  )}
+                  {!session && (
                     <>
                       <WifiOff className="w-4 h-4 mr-1" />
                       Desconectado
@@ -144,23 +165,47 @@ const Controller = () => {
               </div>
               
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Smartphone className="w-5 h-5 text-muted-foreground" />
-                    <span>Dispositivo: {deviceName}</span>
-                  </div>
+                {!session ? (
                   <Button 
-                    variant={isConnected ? "destructive" : "default"}
-                    onClick={handleConnection}
-                    disabled={isRecording}
+                    onClick={handleCreateSession}
+                    className="w-full"
                   >
-                    {isConnected ? "Desconectar" : "Conectar"}
+                    <LogIn className="w-4 h-4 mr-2" />
+                    Criar Nova Sessão
                   </Button>
-                </div>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Código da Sessão</label>
+                      <div className="flex gap-2">
+                        <Input 
+                          value={sessionCode || session.session_code} 
+                          readOnly 
+                          className="font-mono text-lg"
+                        />
+                        <Button variant="outline" size="icon" onClick={copySessionCode}>
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Compartilhe este código com o dispositivo gravador
+                      </p>
+                    </div>
+                    
+                    <Button 
+                      variant="destructive"
+                      onClick={handleDisconnect}
+                      disabled={isRecording}
+                      className="w-full"
+                    >
+                      Encerrar Sessão
+                    </Button>
+                  </>
+                )}
                 
-                {isConnected && (
+                {session?.status === 'connected' && (
                   <div className="text-sm text-muted-foreground">
-                    ✓ Conexão segura estabelecida via WebSocket
+                    ✓ Gravador conectado e pronto
                   </div>
                 )}
               </div>
