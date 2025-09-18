@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 /**
  * Interface do Gravador
@@ -34,6 +35,8 @@ const Recorder = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
   const [storageUsed, setStorageUsed] = useState(67); // Porcentagem
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
   const { toast } = useToast();
 
   // Simulação do timer de gravação
@@ -51,18 +54,107 @@ const Recorder = () => {
     return () => clearInterval(interval);
   }, [isRecording]);
 
-  // Simular conexão automática
+  // Inicializar gravador de mídia
+  const initializeMediaRecorder = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          setAudioChunks(prev => [...prev, event.data]);
+        }
+      };
+
+      recorder.onstop = async () => {
+        console.log('Gravação finalizada, processando áudio...');
+        await processRecording();
+      };
+
+      setMediaRecorder(recorder);
+    } catch (error) {
+      console.error('Erro ao acessar microfone:', error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível acessar o microfone",
+        variant: "destructive"
+      });
+    }
+  }, []);
+
+  // Processar e enviar gravação por email
+  const processRecording = useCallback(async () => {
+    if (audioChunks.length === 0) return;
+
+    try {
+      setIsUploading(true);
+      setUploadProgress(0);
+
+      const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+      const reader = new FileReader();
+      
+      reader.onload = async () => {
+        const base64Audio = reader.result?.toString().split(',')[1];
+        if (!base64Audio) return;
+
+        setUploadProgress(30);
+
+        const { data, error } = await supabase.functions.invoke('send-audio-email', {
+          body: {
+            audioData: base64Audio,
+            duration: recordingTime,
+            timestamp: new Date().toISOString()
+          }
+        });
+
+        setUploadProgress(100);
+
+        if (error) {
+          console.error('Erro ao enviar email:', error);
+          toast({
+            title: "Erro",
+            description: "Erro ao enviar gravação por email",
+            variant: "destructive"
+          });
+        } else {
+          console.log('Email enviado com sucesso:', data);
+          toast({
+            title: "Sucesso!",
+            description: "Gravação enviada para pedrohcdiniz00@gmail.com",
+          });
+        }
+
+        setIsUploading(false);
+        setUploadProgress(0);
+        setAudioChunks([]);
+      };
+
+      reader.readAsDataURL(audioBlob);
+    } catch (error) {
+      console.error('Erro ao processar gravação:', error);
+      setIsUploading(false);
+      setUploadProgress(0);
+      toast({
+        title: "Erro",
+        description: "Erro ao processar gravação",
+        variant: "destructive"
+      });
+    }
+  }, [audioChunks, recordingTime, toast]);
+
+  // Inicializar conexão e gravador
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsConnected(true);
+      initializeMediaRecorder();
       toast({
         title: "Dispositivo Pronto",
-        description: "Aguardando comandos do controlador",
+        description: "Microfone configurado e pronto para gravar",
       });
     }, 1500);
     
     return () => clearTimeout(timer);
-  }, []);
+  }, [initializeMediaRecorder]);
 
   // Formatar tempo de gravação
   const formatTime = (seconds: number) => {
@@ -71,51 +163,31 @@ const Recorder = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Simular recebimento de comando para iniciar gravação
-  const simulateStartCommand = () => {
-    if (!isConnected) return;
-    
-    setIsRecording(true);
-    setRecordingTime(0);
-    toast({
-      title: "Comando Recebido",
-      description: "Iniciando gravação...",
-    });
-  };
+  // Iniciar gravação real
+  const startRecording = useCallback(() => {
+    if (mediaRecorder && mediaRecorder.state === 'inactive' && isConnected) {
+      setAudioChunks([]);
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      toast({
+        title: "Gravação Iniciada",
+        description: "Gravando áudio...",
+      });
+    }
+  }, [mediaRecorder, isConnected, toast]);
 
-  // Simular recebimento de comando para parar gravação
-  const simulateStopCommand = () => {
-    setIsRecording(false);
-    toast({
-      title: "Gravação Finalizada",
-      description: "Processando arquivo...",
-    });
-    
-    // Simular upload automático
-    setTimeout(() => {
-      setIsUploading(true);
-      simulateUpload();
-    }, 1000);
-  };
-
-  // Simular processo de upload
-  const simulateUpload = () => {
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.random() * 15;
-      setUploadProgress(Math.min(progress, 100));
-      
-      if (progress >= 100) {
-        clearInterval(interval);
-        setIsUploading(false);
-        setUploadProgress(0);
-        toast({
-          title: "Upload Concluído",
-          description: "Arquivo salvo na nuvem e email enviado",
-        });
-      }
-    }, 300);
-  };
+  // Parar gravação real
+  const stopRecording = useCallback(() => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      setIsRecording(false);
+      toast({
+        title: "Gravação Finalizada",
+        description: "Processando e enviando por email...",
+      });
+    }
+  }, [mediaRecorder, toast]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-secondary">
@@ -190,25 +262,25 @@ const Recorder = () => {
                   )}
                 </div>
 
-                {/* Botões de teste (apenas para demonstração) */}
+                {/* Botões de controle real */}
                 <div className="flex justify-center gap-4 pt-4">
                   <Button
                     variant="outline"
-                    onClick={simulateStartCommand}
+                    onClick={startRecording}
                     disabled={isRecording || isUploading || !isConnected}
                     className="text-sm"
                   >
                     <Play className="w-4 h-4 mr-2" />
-                    Simular Start
+                    Iniciar Gravação
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={simulateStopCommand}
+                    onClick={stopRecording}
                     disabled={!isRecording}
                     className="text-sm"
                   >
                     <Square className="w-4 h-4 mr-2" />
-                    Simular Stop
+                    Parar Gravação
                   </Button>
                 </div>
               </div>
@@ -323,7 +395,7 @@ const Recorder = () => {
                 
                 <div className="flex justify-between">
                   <span>Destinatário:</span>
-                  <span className="text-muted-foreground">admin@***</span>
+                  <span className="text-muted-foreground">pedrohcdiniz00@gmail.com</span>
                 </div>
                 
                 <div className="flex justify-between">

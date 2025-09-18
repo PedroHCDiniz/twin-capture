@@ -1,1 +1,4 @@
 project_id = "ewnmsycswckkssoppfem"
+
+[functions.send-audio-email]
+verify_jwt = false
